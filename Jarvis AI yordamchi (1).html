@@ -1,0 +1,251 @@
+<!DOCTYPE html>
+<html lang="uz">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Jarvis</title>
+<style>
+  :root { --bg:#f1f5f9; --panel:#ffffff; --text:#0f172a; --muted:#64748b; --blue:#0284c7; --yellow:#b45309; --green:#16a34a; --btn-text:#ffffff; color-scheme: light; box-sizing: border-box; padding-top: env(safe-area-inset-top, 0px); padding-bottom: env(safe-area-inset-bottom, 0px); }
+  @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --bg:#0b1220; --panel:#111b2e; --text:#e2e8f0; --muted:#94a3b8; --blue:#38bdf8; --yellow:#fbbf24; --green:#22c55e; --btn-text:#0b1220; color-scheme: dark; } }
+  :root[data-theme="dark"] { --bg:#0b1220; --panel:#111b2e; --text:#e2e8f0; --muted:#94a3b8; --blue:#38bdf8; --yellow:#fbbf24; --green:#22c55e; --btn-text:#0b1220; color-scheme: dark; }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body { background: var(--bg); color: var(--text); font-family: system-ui, sans-serif; display: flex; flex-direction: column; }
+  header { text-align: center; padding: 12px 12px 4px; }
+  h1 { margin: 0; font-size: 20px; letter-spacing: 3px; color: var(--blue); }
+  #status { color: var(--muted); font-size: 13px; margin-top: 2px; }
+  #chat { flex: 1; overflow-y: auto; margin: 10px 12px; padding: 12px; background: var(--panel); border-radius: 14px; }
+  .msg { margin: 0 0 12px; line-height: 1.4; white-space: pre-wrap; overflow-wrap: anywhere; }
+  .me b { color: var(--yellow); } .ai b { color: var(--blue); }
+  .msg a { color: var(--blue); font-weight: 600; }
+  .row { display: flex; gap: 8px; padding: 0 12px 10px; }
+  input[type=text], select { flex: 1; min-width: 0; background: var(--panel); color: var(--text); border: 1px solid var(--muted); border-radius: 12px; padding: 12px; font-size: 16px; }
+  button { border: 0; border-radius: 12px; padding: 12px 14px; font-size: 16px; color: var(--btn-text); background: var(--blue); }
+  #mic { background: var(--green); color: #fff; font-size: 20px; }
+  #mic.on { background: #ef4444; }
+  .link { background: none; color: var(--muted); font-size: 13px; padding: 4px; }
+  dialog { background: var(--panel); color: var(--text); border: 0; border-radius: 14px; width: min(92vw, 420px); }
+  dialog label { display: block; font-size: 13px; color: var(--muted); margin: 10px 0 4px; }
+  dialog select, dialog input { width: 100%; }
+  dialog::backdrop { background: rgba(0,0,0,.6); }
+</style>
+</head>
+<body>
+<header>
+  <h1>J.A.R.V.I.S</h1>
+  <div id="status">Tayyor</div>
+</header>
+
+<div id="chat"></div>
+
+<div class="row">
+  <input id="text" type="text" placeholder="Yozing yoki 🎤 bosing…" autocomplete="off">
+  <button id="send">➤</button>
+  <button id="mic">🎤</button>
+</div>
+<div class="row" style="justify-content:center; padding-bottom:4px">
+  <button class="link" id="settingsBtn">⚙️ Sozlamalar</button>
+  <button class="link" id="clearBtn">🗑 Tozalash</button>
+</div>
+
+<dialog id="settings">
+  <h3 style="margin-top:0">Sozlamalar</h3>
+  <label>Jarvis ovozi tili</label>
+  <select id="lang">
+    <option value="uz-UZ">O’zbekcha</option>
+    <option value="ru-RU">Русский</option>
+    <option value="en-US">English</option>
+  </select>
+  <label>Standart shahar (ob-havo uchun)</label>
+  <input id="city" type="text" value="Tashkent">
+  <div style="margin-top:14px; text-align:right"><button id="saveSettings">Saqlash</button></div>
+</dialog>
+
+<script>
+const SYSTEM = "Sen Jarvis ismli ovozli yordamchisan. Foydalanuvchi qaysi tilda yozsa yoki gapirsa, o'sha tilda javob ber. Javoblaring qisqa (1-3 gap) va ovoz chiqarib o'qishga qulay bo'lsin. Markdown ishlatma.";
+
+const $ = id => document.getElementById(id);
+const store = {
+  get(k, d) { try { return localStorage.getItem(k) ?? d; } catch { return d; } },
+  set(k, v) { try { localStorage.setItem(k, v); } catch {} }
+};
+
+let history = [];
+let lang = store.get("lang", "uz-UZ");
+let city = store.get("city", "Tashkent");
+let sample = null, dict = null, dictListening = false;
+
+/* ---------- Interfeys ---------- */
+function addMsg(who, text) {
+  const d = document.createElement("div");
+  d.className = "msg " + (who === "Siz" ? "me" : "ai");
+  const b = document.createElement("b");
+  b.textContent = who + ": ";
+  d.append(b, document.createTextNode(text));
+  $("chat").append(d);
+  $("chat").scrollTop = $("chat").scrollHeight;
+  return d;
+}
+function addLink(url, label) {
+  const d = document.createElement("div");
+  d.className = "msg ai";
+  const a = document.createElement("a");
+  a.href = url; a.target = "_blank"; a.rel = "noopener noreferrer";
+  a.textContent = "👉 " + label;
+  d.append(a);
+  $("chat").append(d);
+  $("chat").scrollTop = $("chat").scrollHeight;
+}
+const setStatus = t => $("status").textContent = t;
+
+/* ---------- Ovoz chiqarish ---------- */
+function speakOnly(text) {
+  if (!("speechSynthesis" in window)) return;
+  try {
+    speechSynthesis.cancel();
+    const u = new SpeechSynthesisUtterance(text);
+    u.lang = lang;
+    const v = speechSynthesis.getVoices().find(x => x.lang.replace("_", "-").startsWith(lang.slice(0, 2)));
+    if (v) u.voice = v;
+    speechSynthesis.speak(u);
+  } catch {}
+}
+function speak(text) { addMsg("Jarvis", text); speakOnly(text); }
+
+/* ---------- Claude va ovoz imkoniyatlari ---------- */
+(async () => {
+  try { sample = await claude.use("sample"); } catch { sample = null; }
+  try {
+    dict = await claude.use("dictation");
+    if (dict) {
+      dict.onFinal(({ text }) => { if (text && text.trim()) process(text); });
+      dict.onState(({ state }) => {
+        dictListening = state === "listening";
+        $("mic").classList.toggle("on", dictListening);
+        setStatus(dictListening ? "🎤 Eshitaman…" : "Tayyor");
+      });
+    }
+  } catch { dict = null; }
+})();
+
+function toggleMic() {
+  if (dict) {
+    if (dictListening) { dict.stop(); return; }
+    dict.start().catch(e => {
+      if (e && e.code === "not_granted") speak("Mikrofonga ruxsat berilmadi. Klaviaturadagi 🎤 tugmasidan foydalaning.");
+    });
+    return;
+  }
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (SR) {
+    const rec = new SR();
+    rec.lang = lang;
+    rec.onstart = () => { $("mic").classList.add("on"); setStatus("🎤 Eshitaman…"); };
+    rec.onend = () => { $("mic").classList.remove("on"); setStatus("Tayyor"); };
+    rec.onerror = () => speak("Mikrofon ishlamadi. Klaviaturadagi 🎤 tugmasidan foydalaning.");
+    rec.onresult = e => process(e.results[0][0].transcript);
+    try { rec.start(); } catch {}
+    return;
+  }
+  speak("Bu yerda mikrofon ishlamadi. Yozish maydonida klaviaturadagi 🎤 tugmasini bosib gapiring.");
+}
+
+/* ---------- Buyruqlar ---------- */
+async function getWeather(c) {
+  try {
+    const r = await fetch("https://wttr.in/" + encodeURIComponent(c) + "?format=%C,+%t&lang=en");
+    if (!r.ok) throw 0;
+    return c + " ob-havosi: " + (await r.text()).trim();
+  } catch { return "Ob-havoni olib bo’lmadi."; }
+}
+
+function setReminder(cmd) {
+  const m = cmd.match(/(\d+)\s*(sekund|soniya|daqiqa|minut|soat)/);
+  if (!m) return "Qancha vaqtdan keyin? Masalan: eslatma 10 daqiqadan keyin choy qo’y.";
+  const n = +m[1], u = m[2];
+  const sec = n * (u === "soat" ? 3600 : (u === "daqiqa" || u === "minut") ? 60 : 1);
+  let note = cmd.replace(m[0], "");
+  for (const w of ["eslatma", "eslat", "keyin", "dan", "da"]) note = note.replace(new RegExp("\\b" + w + "\\b", "g"), "");
+  note = note.trim() || "vaqt bo’ldi";
+  setTimeout(() => { speak("Eslatma: " + note); if (navigator.vibrate) navigator.vibrate([300, 150, 300]); }, sec * 1000);
+  return `Yaxshi, ${n} ${u}dan keyin eslataman. Sahifa ochiq turishi kerak.`;
+}
+
+async function localCommand(cmd) {
+  const has = (...w) => w.some(x => cmd.includes(x));
+  const link = (url, label, say) => { addLink(url, label); return say; };
+
+  if (has("soat necha", "vaqt necha")) return "Hozir soat " + new Date().toLocaleTimeString("uz-UZ", { hour: "2-digit", minute: "2-digit" }) + ".";
+  if (has("bugun nechanchi", "sana nechi")) return "Bugun " + new Date().toLocaleDateString("ru-RU") + ".";
+  if (has("ob-havo", "ob havo", "weather")) {
+    const c = cmd.split(/ob[- ]havo|weather/).pop().trim() || city;
+    return await getWeather(c);
+  }
+  if (has("eslat")) return setReminder(cmd);
+  if (has("musiqa", "qo'shiq", "qoshiq")) {
+    const q = cmd.replace(/musiqa|qo'shiq|qoshiq|qo'y|qoy|chal/g, "").trim() || "music";
+    return link("https://www.youtube.com/results?search_query=" + encodeURIComponent(q), "YouTube’da ochish: " + q, q + " qidirilmoqda. Havolani bosing.");
+  }
+  if (has("qidir")) {
+    const q = cmd.split("qidir").slice(1).join(" ").trim();
+    if (q) return link("https://www.google.com/search?q=" + encodeURIComponent(q), "Google’da ochish: " + q, q + " bo’yicha qidiryapman. Havolani bosing.");
+  }
+  if (has("youtube")) return link("https://www.youtube.com", "YouTube’ni ochish", "YouTube tayyor. Havolani bosing.");
+  if (has("google")) return link("https://www.google.com", "Google’ni ochish", "Google tayyor. Havolani bosing.");
+  if (has("telegram")) return link("https://t.me", "Telegram’ni ochish", "Telegram tayyor. Havolani bosing.");
+  if (has("qo'ng'iroq", "tel qil")) {
+    const num = (cmd.match(/\+?\d[\d\s-]{6,}/) || [])[0];
+    if (num) return link("tel:" + num.replace(/[\s-]/g, ""), "Qo’ng’iroq: " + num.trim(), "Raqam tayyor. Havolani bosing.");
+  }
+  return null;
+}
+
+/* ---------- Claude ---------- */
+async function askClaude(q) {
+  if (!sample) return "Claude ulanmagan. Sahifani Claude ilovasida o’z hisobingiz bilan kirib oching.";
+  history.push({ role: "user", content: q });
+  const msgs = history.slice(-20).map(m => ({ ...m }));
+  while (msgs.length && msgs[0].role !== "user") msgs.shift();
+  msgs[0].content = "Ko’rsatma: " + SYSTEM + "\n\n" + msgs[0].content;
+  try {
+    const out = await sample(msgs, { cache: false });
+    const text = (out.text || "").trim() || "Javob olinmadi.";
+    history.push({ role: "assistant", content: text });
+    return text;
+  } catch (e) {
+    history.pop();
+    if (e && e.code === "not_granted") return "Claude’dan foydalanishga ruxsat berilmadi.";
+    if (e && e.code === "rate_limited") return "Hozircha limit tugadi, birozdan keyin urinib ko’ring.";
+    return "Xatolik yuz berdi. Qayta urinib ko’ring.";
+  }
+}
+
+async function process(raw) {
+  const text = raw.trim();
+  if (!text) return;
+  addMsg("Siz", text);
+  setStatus("🤔 O’ylayapman…");
+  const norm = text.toLowerCase().replace(/[’ʻʼ`]/g, "'");
+  const reply = (await localCommand(norm)) ?? (await askClaude(text));
+  speak(reply);
+  setStatus("Tayyor");
+}
+
+/* ---------- Tugmalar ---------- */
+function send() { const t = $("text").value; $("text").value = ""; process(t); }
+$("send").onclick = send;
+$("text").addEventListener("keydown", e => { if (e.key === "Enter") send(); });
+$("mic").onclick = toggleMic;
+$("clearBtn").onclick = () => { history = []; $("chat").innerHTML = ""; };
+$("settingsBtn").onclick = () => { $("lang").value = lang; $("city").value = city; $("settings").showModal(); };
+$("saveSettings").onclick = () => {
+  lang = $("lang").value; store.set("lang", lang);
+  city = $("city").value.trim() || "Tashkent"; store.set("city", city);
+  $("settings").close();
+  speak("Sozlamalar saqlandi.");
+};
+
+addMsg("Jarvis", "Salom! Men Jarvisman. Yozing yoki 🎤 tugmasini bosib gapiring.");
+</script>
+</body>
+</html>
