@@ -20,7 +20,7 @@ jobs:
           distribution: 'temurin'
 
       - name: Android SDK ni sozlash
-        uses: android-actions/setup-android@v3
+        uses: android-actions/setup-android@v4
 
       - name: Gradlew ga ruxsat berish
         run: chmod +x gradlew
